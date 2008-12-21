@@ -1,0 +1,352 @@
+#!/usr/bin/env python
+"""
+Author: Nick Anderson
+Date: Dec 10 2008
+
+cycle is a todo list manager modeled on "The Cycle" as described in 
+Time Management for System Administrators By Thomas A. Limoncelli
+"""
+
+import os
+import subprocess
+import datetime, time
+import re
+import sys
+import fileinput
+import parsedatetime.parsedatetime as pdt
+import parsedatetime.parsedatetime_consts as pdc 
+
+from optparse import OptionParser, OptionGroup
+
+__todo_dir__ = os.path.expanduser('~/.todocycle')
+__editor__ = 'vim'
+
+def pre_append(newline, filename):
+    """
+    This will append a new line to the begining of a file
+
+    newline -- string that you want appended to the file
+    filename -- string of the filename that you want to prepend to
+    """
+    for n, line in enumerate(fileinput.FileInput(filename,inplace=1)):
+        if n == 0:
+            print newline
+            break
+
+def calendar_iterator(start, direction='next', fmt='%Y-%m-%d'):
+    """
+    Iterates at a daily rate in the direction specified 
+    in time from a given start date
+
+    start -- date string in specified format
+    fmt -- format the date string is in
+    """
+ 
+    curr = datetime.date(*time.strptime(start, fmt)[:3])
+    one = datetime.timedelta(1)
+    while 1:
+        if direction == 'next':
+            curr += one
+        elif direction == 'previous':
+            curr -= one
+        else:
+            sys.exit('calendar_iterator recieved invalid direction')
+        yield curr
+
+def find_todo_txt(date, direction, maxdays=14):
+    """
+    Find the next todo.txt in the direction specified up to maxdays
+    
+    date -- datestring in format Y-m-d
+    direction -- direction in calandar to look for the todo.txt file
+                 valid directions = 'forward' or 'reverse'
+    maxdays -- maximum number of days to look back for a previous todo.txt
+    """
+    if direction == 'next':
+        iter = calendar_iterator(today, direction)
+        date = iter.next()
+        return str(date) + '.txt'
+    elif direction == 'previous':
+        iter = calendar_iterator(today, direction)
+        count = 0
+        while True:
+            previous_date = str(iter.next())
+            previous_todotxt = previous_date + '.txt'
+            if os.path.exists(previous_todotxt):
+                return previous_todotxt
+            elif count == maxdays:
+                print 'no todos found in the previous %s days' % maxdays
+                return None
+            else:
+                count += 1
+    else:
+        sys.exit('invalid direction passed to find_todo_txt')
+
+def write_todo(entries, filename):
+    """
+    Write entries to filename, return nothing
+
+    entries -- List of task entries
+    filename -- file to write tas entries to
+    """
+    file = open(filename, 'w')
+    for entry in entries:
+        file.write(entry)
+    file.close()
+
+def get_file_lines(filename):
+    """
+    Return list of strings (lines in file)
+
+    filename -- file to load and read
+    """
+    file = open(filename, 'r')
+    return file.readlines()
+    
+def get_unfinished_tasks(tasks):
+    """
+    Return list of unfinished tasks
+
+    tasks -- list of tasks to process
+    """
+    unfinished_tasks = []
+    postponed = re.compile('^>')
+    done = re.compile('^-')
+    for task in tasks:
+        if not postponed.match(task) and not done.match(task):
+            unfinished_tasks.append(task)
+    return unfinished_tasks
+
+def get_postponed_tasks(tasks):
+    """
+    Return list of postponed tasks
+
+    tasks -- list of tasks to process
+    """
+    postponed_tasks = []
+    postponed = re.compile('>')
+    for task in tasks:
+        if postponed.match(task):
+            postponed_tasks.append(task)
+    return postponed_tasks
+
+def get_completed_tasks(tasks):
+    """
+    Return list of completed tasks
+
+    tasks -- list of tasks to process
+    """
+    completed_tasks = []
+    completed = re.compile('^-')
+    for task in tasks:
+        if completed.match(task):
+            completed_tasks.append(task)
+    return completed_tasks
+
+def get_forward_tasks(file):
+    """
+    Return list of tasks that are to be postponed
+
+    file -- file to look for postponed tasks in
+    """
+    forward_tasks = []
+    for line in file.readlines():
+        if re.match('^>', line):
+            forward_tasks.append(line)
+    return forward_tasks
+
+def get_plain_entries(entries):
+    """
+    Return list of entries that have the finished and postponed flags striped
+    
+    entries -- list of entries to process
+    """
+    plain_entries = []
+    for entry in entries:
+        plain_entries.append(entry.lstrip('->'))
+    return plain_entries
+ 
+def push_forward_tasks(tasks, filename):
+    """
+    Push current tasks defined to be forwarded to the next days todo.txt
+
+    tasks -- list of current tasks
+    filename -- file to push postponed tasks to 
+    """
+    if not os.path.exists(filename):
+        lines = []
+    else:
+        lines = get_file_lines(filename)
+    for task in tasks:
+        task = task.lstrip('>')
+        if task in lines: 
+            match = True
+            continue
+        match = False
+        if match == False:
+            lines.append(task)
+    file = open(filename, 'w')
+    for line in lines:
+        file.write(line)
+        file.flush()
+    file.close()
+
+def parse_date(datestring):
+    """
+    Take given datestring and return a date in the format Y-m-d
+    
+    datestring -- parsedatetime compatible datestring
+    """
+    p = pdt.Calendar(pdc.Constants())
+    date = p.parse(datestring)
+    date = '%s-%s-%s' % (str(date[0][0]), str(date[0][1]), 
+                         str(date[0][2]))
+    return date
+
+def get_todo_files_date_range(start_date, end_date):
+    """
+    Return list of txt files that exist for given date range
+
+    start_date -- Day to start iteration from (past to present)
+    end_date -- Day to end iteration
+    """
+    date = start_date
+    iter = calendar_iterator(start_date, 'next')
+    todo_txt_dates = []
+    if start_date == end_date:
+        if os.path.exists(start_date+'.txt'):
+            todo_txt_dates.append(start_date+'.txt')
+            return todo_txt_dates
+    dates = []
+    while not date == end_date:
+        date = str(iter.next())
+        dates.append(date)
+    for each in dates:
+        if os.path.exists(each+'.txt'):
+            todo_txt_dates.append(each+'.txt')
+    return todo_txt_dates
+
+def sumarize_todo(todo_file):
+    """
+    Print out a clear summaary of a days tasks 
+
+    todo_file - string of file name
+    """
+    entries = get_file_lines(todo_file)
+    unfinished_tasks = get_unfinished_tasks(entries)
+    postponed_tasks = get_postponed_tasks(entries)
+    completed_tasks = get_completed_tasks(entries)
+
+    if not (len(unfinished_tasks) == 0 and len(postponed_tasks) == 0 and
+            len(completed_tasks) == 0):
+        print ""
+        print "Summary for %s" % todo_file
+        print "-" * 60
+        if options.unfinished:
+            if not len(unfinished_tasks) == 0:
+                print ""
+                print "Unfinished tasks:"
+                for each in unfinished_tasks:
+                    print '\t', each.rstrip()
+        if options.postponed:
+            if not len(postponed_tasks) == 0:
+                print ""
+                print "Postponed tasks:"
+                for each in postponed_tasks:
+                    print '\t', each.rstrip().lstrip('>')
+        if options.completed:
+            if not len(completed_tasks) == 0:
+                print ""
+                print "Completed tasks"
+                for each in completed_tasks:
+                    print '\t', each.rstrip().lstrip('-')
+        print "+" * 60, "\n\n"
+        
+
+if __name__ == '__main__':
+    """
+    The main wrapper
+    """
+    if not os.path.exists(__todo_dir__):
+        os.mkdir(__todo_dir__)
+    os.chdir(__todo_dir__)
+
+    today = time.strftime('%Y-%m-%d', time.localtime())
+    todo_today = today + '.txt'
+
+    parser = OptionParser(usage="%prog [report] [[start date]-[end date]]")
+
+    report = OptionGroup(parser, "Report filtering options",
+                         "Only active when using the report action"
+                         "Default behavior is to show all task status unfiltered."
+                         "Applying a filter shows thats that match the filter"
+                         "applied. Filter options can be applied in conjuntion.")
+
+    report.add_option("-u", "--unfinished", dest="unfinished",
+                      action="store_true", help="Show unfinished tasks")
+    report.add_option("-p", "--postponed", dest="postponed",
+                      action="store_true", help="Show postponed tasks")
+    report.add_option("-c", "--completed", dest="completed",
+                      action="store_true", help="Show completed tasks")
+
+    parser.add_option_group(report)
+    (options, args) = parser.parse_args()
+
+    actions = ['report']
+    if not options.unfinished and not options.postponed and not options.completed:
+        options.unfinished = True
+        options.postponed = True
+        options.completed = True
+
+    if not len(args) == 0:
+        SpecifiedAction = re.compile(args[0])
+        for action in actions:
+            if SpecifiedAction.match('report'):
+                if not len(args) == 1:
+                    daterange = " ".join(args[1:])
+                    daterange = daterange.split('-')
+                    if len(daterange) == 0:
+                        startDate = parse_date('today')
+                        endDate = parse_date('today')
+                    if len(daterange) > 0:
+                        startDate = parse_date(daterange[0])
+                    if len(daterange) == 1:
+                        endDate = startDate
+                    if len(daterange) > 1:
+                        endDate = parse_date(daterange[1])
+                else:
+                    startDate = parse_date('today')
+                    endDate = startDate
+                todo_files = get_todo_files_date_range(startDate, endDate)
+                for each in todo_files:
+                    sumarize_todo(each)
+                sys.exit()
+            else:
+                parser.error("%s is not recognized"%args[0])
+
+    last_todo_txt = find_todo_txt(today, 'previous')
+    current_todo_txt = today + '.txt'
+
+    if os.path.exists(todo_today):
+        current_task_entries = get_file_lines(current_todo_txt)
+    else:
+        current_task_entries = []
+
+    if not last_todo_txt == None:
+        previous_task_entries = get_file_lines(last_todo_txt)
+        previous_unfinished_tasks = get_unfinished_tasks(previous_task_entries)
+        previous_unfinished_tasks.reverse()
+        for task in previous_unfinished_tasks:
+            if not task in get_plain_entries(current_task_entries):
+                current_task_entries.insert(0,task)
+            write_todo(current_task_entries, current_todo_txt)
+
+    editor_cmd = __editor__ + ' ' + todo_today
+    subprocess.call(editor_cmd, shell=True)
+    
+    file = open(todo_today, 'r')
+    forward_tasks = get_forward_tasks(file)
+    file.close()
+
+    if not len(forward_tasks) == 0:
+        push_forward_tasks(forward_tasks, find_todo_txt(today, 'next'))
