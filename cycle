@@ -199,8 +199,15 @@ def parse_date(datestring):
     """
     p = pdt.Calendar(pdc.Constants())
     date = p.parse(datestring)
-    date = '%s-%s-%s' % (str(date[0][0]), str(date[0][1]), 
-                         str(date[0][2]))
+    year = str(date[0][0])
+    month = str(date[0][1])
+    day = str(date[0][2])
+
+    if not len(month) == 2:
+        month = '0' + month
+    if not len(day) == 2:
+        day = '0' + day
+    date = '%s-%s-%s' % (year, month, day)
     return date
 
 def get_todo_files_date_range(start_date, end_date):
